@@ -42,6 +42,13 @@ results/benchmarks/*.csv
 results/traces/*.log
 results/traces/*.dmesg
 
+# ----- Temporary Developer Documentation & Planning Files (Local Only) -----
+SETUP.md
+SESSION_LOG.md
+implementation_plan*.md
+*.pdf
+docs/temp/
+
 # ----- Temporary / editor / OS files -----
 *.swp
 *.swo
