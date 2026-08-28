@@ -1,0 +1,55 @@
+# ===========================================
+# NEXUS Project .gitignore
+# ===========================================
+
+# ----- Kernel source trees (LARGE - clone via build scripts) -----
+env/kernel/linux-*/
+
+# ----- Kernel build artifacts -----
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.symvers
+modules.order
+vmlinux
+vmlinux.h
+bzImage
+
+# ----- Rootfs build artifacts & source trees -----
+env/rootfs/initramfs/
+env/rootfs/buildroot*/
+env/rootfs/*.tar.gz
+env/rootfs/busybox
+env/rootfs/*.cpio.gz
+env/rootfs/*.ext2
+env/rootfs/*.ext4
+env/rootfs/*.img
+
+# ----- QEMU disk images -----
+*.qcow2
+*.raw
+
+# ----- Compiled exploit binaries -----
+exploit/common/*.o
+exploit/cve_*/*.o
+exploit/cve_*/trigger
+exploit/cve_*/exploit
+
+# ----- Benchmark raw data (keep summary, exclude large CSVs) -----
+results/benchmarks/*.csv
+results/traces/*.log
+results/traces/*.dmesg
+
+# ----- Temporary / editor / OS files -----
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ----- PDF (already in repo as reference, but large) -----
+# Uncomment if the PDF is too large:
+# *.pdf
