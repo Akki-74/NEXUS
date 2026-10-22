@@ -184,6 +184,7 @@ CONFIG_SERIAL_8250_CONSOLE=y
 |:---|:---|
 | [`docs/CVE-2022-32250-deep-dive.md`](docs/CVE-2022-32250-deep-dive.md) | Full vulnerability anatomy: source locus, root cause analysis, call graph, upstream patch diff, and vulnerable-vs-patched comparison matrix |
 | [`docs/differential-analysis.md`](docs/differential-analysis.md) | Phase 4 empirical verification report: comparative matrix, KASAN splat analysis, and teardown list poisoning |
+| [`docs/defense-evaluation.md`](docs/defense-evaluation.md) | Phase 5 defense report: allocator mitigations (`RANDOM_KMALLOC_CACHES`, freelist hardening), namespace controls, and hardware memory tagging |
 
 ---
 
@@ -211,7 +212,7 @@ The following capabilities have been verified inside the QEMU guest:
 | **Phase 2** | QEMU lab environment (kernel builds + initramfs + boot) | ✅ Complete |
 | **Phase 3** | Exploit modules & initramfs integration | ✅ Complete |
 | **Phase 4** | Patch verification & differential analysis | ✅ Complete |
-| **Phase 5** | Benchmarking & defense evaluation | 🔲 Planned |
+| **Phase 5** | Benchmarking & defense evaluation | ✅ Complete |
 
 ---
 
