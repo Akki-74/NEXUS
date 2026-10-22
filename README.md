@@ -1,231 +1,253 @@
 # NEXUS 🔬
 
-**Kernel Vulnerability Research & Analysis Platform**
+[![Kernel: Linux 5.15 LTS](https://img.shields.io/badge/Kernel-Linux%20v5.15.40-blue.svg)](https://kernel.org)
+[![Target: CVE-2022-32250](https://img.shields.io/badge/CVE-2022--32250-red.svg)](https://nvd.nist.gov/vuln/detail/CVE-2022-32250)
+[![Environment: QEMU x86_64](https://img.shields.io/badge/Virtualization-QEMU%20x86__64-orange.svg)](https://www.qemu.org/)
+[![Status: Research Complete](https://img.shields.io/badge/Research%20Status-Complete%20(Phases%200--5)-brightgreen.svg)]()
+[![License: Educational](https://img.shields.io/badge/License-Educational%20Research-lightgrey.svg)]()
 
-A structured research environment for studying Linux kernel memory safety vulnerabilities, with a focus on object lifetime failures in the `netfilter/nf_tables` subsystem.
+**NEXUS** is an end-to-end Linux kernel vulnerability research, reproduction, and defense evaluation platform. It focuses on **object lifetime failures** in the Netfilter (`nf_tables`) subsystem, utilizing **CVE-2022-32250** on upstream Linux v5.15.40 as the primary case study.
 
-> **⚠️ Disclaimer**: This project is strictly for **educational and academic research purposes only**. All work is conducted in isolated QEMU virtual machines. No code in this repository targets production systems.
+> **⚠️ Disclaimer**: This project is strictly for **educational, academic, and defensive security research**. All testing is performed in isolated, virtualized QEMU environments. No functional exploit payloads targeting production infrastructure are provided.
 
 ---
 
-## 📋 Project Overview
+## 📋 Research Focus & Anatomy
 
-NEXUS provides a reproducible lab environment for analyzing **CVE-2022-32250** — a Use-After-Free (UAF) vulnerability in the Linux kernel's `nf_tables` netfilter subsystem.
-
-| Property | Detail |
+| Property | Specification |
 |:---|:---|
 | **Target CVE** | [CVE-2022-32250](https://nvd.nist.gov/vuln/detail/CVE-2022-32250) |
-| **Subsystem** | `netfilter` / `nf_tables` (`net/netfilter/nf_tables_api.c`) |
-| **Bug Class** | Object Lifetime Failure / Use-After-Free (SLUB) |
-| **Baseline Kernel** | Upstream Linux `v5.15.40` (unpatched) |
-| **Upstream Fix** | Commit [`f36736fbd484`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f36736fbd48491a8d85cd22f4740d542c5a1546e) |
-| **Virtualization** | QEMU `x86_64` (no KVM) on WSL2 Ubuntu |
+| **Vulnerability Class** | Object Lifetime Inversion / SLUB Use-After-Free (UAF) |
+| **Subsystem** | `net/netfilter/nf_tables_api.c` (`nft_set_elem_expr_alloc`) |
+| **Affected Slabs** | `kmalloc-64` general-purpose cache |
+| **Attack Vector** | Local unprivileged user namespaces (`CLONE_NEWUSER | CLONE_NEWNET`) |
+| **Upstream Patch** | Commit [`f36736fbd484`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f36736fbd48491a8d85cd22f4740d542c5a1546e) (Merged in Linux v5.18) |
 
-### Vulnerability Summary
-
-The bug resides in `nft_set_elem_expr_alloc()`, which calls `nft_expr_init()` to allocate and initialize a set element expression **before** validating the `NFT_EXPR_STATEFUL` flag. When a non-stateful expression (e.g., lookup) is passed, `init()` binds the expression to internal set data structures. The subsequent validation failure frees the expression via `kfree()` without unbinding, leaving a dangling pointer in `set->binding` — a classic Use-After-Free.
-
-The upstream fix moves the `NFT_EXPR_STATEFUL` check into `nft_expr_init()` **before** allocation and initialization, ensuring non-stateful expressions are rejected cleanly with `-EOPNOTSUPP`.
+### The Root Cause Flaw
+In unpatched Linux 5.15.40:
+1. `nft_set_elem_expr_alloc()` calls `nft_expr_init()` to allocate an expression in `kmalloc-64` and initialize it.
+2. `expr->ops->init()` (e.g. `nft_lookup_init`) links `priv->binding` directly into the target set's binding list (`s_target->bindings`).
+3. **The Inversion**: `nft_set_elem_expr_alloc()` checks whether the expression is stateful (`NFT_EXPR_STATEFUL`) **after** initialization.
+4. When a non-stateful lookup expression is passed, the check fails and destroys the expression (`kfree`). However, `nft_expr_destroy()` **fails to unbind the set**, leaving a dangling pointer inside `s_target->bindings`.
+5. On the next bind attempt or namespace teardown, the kernel dereferences the freed memory chunk, triggering an immediate Use-After-Free.
 
 ---
 
-## 🏗️ Repository Structure
+## 🔬 Empirical Findings & Differential Verification
+
+The vulnerability was empirically verified in QEMU across both vulnerable and remediated kernel builds:
+
+```
++----------------------------------------------------------------------------------------------------+
+|                                    NEXUS Differential Matrix                                       |
++----------------------------+---------------------------------------+-------------------------------+
+| Feature                    | Unpatched Kernel (bzImage-kasan)      | Patched Kernel (bzImage-patched)|
++----------------------------+---------------------------------------+-------------------------------+
+| Validation Point           | Post-init (nft_set_elem_expr_alloc)   | Pre-alloc (nft_expr_init)     |
+| SLUB Allocation            | 64 bytes in kmalloc-64 allocated/freed| None (rejected before kzalloc)|
+| Target Set Bindings List   | Stale pointer to freed chunk          | Untouched / Pristine          |
+| Injection Round 2          | BUG: KASAN: use-after-free (read 4B)  | Clean -EOPNOTSUPP rejection   |
+| Namespace Teardown         | WARNING: LIST_POISON (dead000000000122) Clean DELTABLE               |
+| Kernel Taint               | Tainted (G B)                         | Untainted (Pristine)          |
++----------------------------+---------------------------------------+-------------------------------+
+```
+
+### KASAN Splat Snippet (`bzImage-kasan`)
+```text
+==================================================================
+BUG: KASAN: use-after-free in nf_tables_bind_set+0x69f/0x960
+Read of size 4 at addr ffff888005fd2670 by task trigger/28
+
+Allocated by task 28:
+ nft_expr_init+0xb6/0x260
+ nft_set_elem_expr_alloc+0x1b/0x1e0
+ nft_add_set_elem+0x3bb/0x2c50
+ nf_tables_newsetelem+0x541/0x9c0
+
+Freed by task 28:
+ kfree+0xb7/0x270
+ nft_set_elem_expr_alloc+0x180/0x1e0
+ nft_add_set_elem+0x3bb/0x2c50
+ nf_tables_newsetelem+0x541/0x9c0
+
+The buggy address belongs to the object at ffff888005fd2640
+ which belongs to the cache kmalloc-64 of size 64
+==================================================================
+```
+*(Full diagnostic log captured in [`results/traces/cve-2022-32250-kasan.log`](results/traces/cve-2022-32250-kasan.log))*
+
+---
+
+## 📊 Performance & Benchmark Metrics
+
+Benchmarked using [`bench/bench_netlink.c`](bench/bench_netlink.c) (500 atomic transaction cycles / 1,000 Netfilter operations):
+
+| Metric | `bzImage-baseline` | `bzImage-kasan` | `bzImage-patched` | Fix Overhead |
+|:---|:---:|:---:|:---:|:---:|
+| **Binary Size** | 3.79 MB | 8.43 MB *(+122.5%)* | 3.79 MB | **+0.00%** |
+| **Minimum VM RAM** | 512 MB | 2,048 MB *(+300%)* | 512 MB | **0 MB** |
+| **Netlink Latency (avg)** | 48.2 μs | 124.6 μs | 48.4 μs | **+0.41%** (within jitter) |
+| **Throughput** | 20,746 ops/s | 8,025 ops/s | 20,661 ops/s | **-0.41%** |
+| **Security State** | Vulnerable | Sanitized | **Remediated** | Clean rejection |
+
+*(Detailed analysis available in [`results/benchmarks/benchmark_summary.md`](results/benchmarks/benchmark_summary.md))*
+
+---
+
+## 🏗️ Repository Architecture
 
 ```
 NEXUS/
-├── README.md                        # This file
-├── .gitignore                       # Excludes kernel source trees, build artifacts, binaries
+├── README.md                            # Executive overview, architecture & quickstart
+├── .gitignore                           # Excludes large kernel sources, images, raw logs
 │
-├── docs/                            # Research documentation
-│   └── CVE-2022-32250-deep-dive.md  # Phase 1: Vulnerability anatomy & source analysis
+├── docs/                                # Technical & research documentation
+│   ├── CVE-2022-32250-deep-dive.md      # Phase 1: Vulnerability anatomy, call graphs & fix diff
+│   ├── differential-analysis.md         # Phase 4: Comparative matrix, KASAN splats & list poisoning
+│   └── defense-evaluation.md            # Phase 5: RANDOM_KMALLOC_CACHES, MTE & namespace defenses
 │
-├── env/                             # Lab environment setup
-│   ├── kernel/                      # Kernel build infrastructure
-│   │   ├── nexus_baseline.config    # Minimal x86_64 config with netfilter & namespaces
-│   │   ├── nexus_kasan.config       # KASAN + SLUB_DEBUG overlay config
-│   │   ├── build_baseline.sh        # Builds bzImage-baseline (unpatched)
-│   │   ├── build_kasan.sh           # Builds bzImage-kasan (with memory sanitizer)
-│   │   ├── build_patched.sh         # Builds bzImage-patched (with upstream fix applied)
-│   │   └── linux-5.15.40/           # Kernel source tree (git-ignored, cloned at setup)
-│   │
-│   ├── rootfs/                      # Root filesystem artifacts (git-ignored)
-│   ├── build_initramfs.sh           # BusyBox initramfs builder script
-│   ├── run_qemu.sh                  # QEMU launch script (serial console, no KVM)
-│   ├── test_kernel.sh               # Quick kernel boot test
-│   ├── test_namespaces.sh           # Verify user/net namespace support in guest
-│   ├── setup_qemu.sh               # QEMU installation helper
-│   └── setup_qemu_env.sh           # Full environment setup helper
+├── env/                                 # Kernel & QEMU lab infrastructure
+│   ├── kernel/                          # Kernel configurations & build automation
+│   │   ├── nexus_baseline.config        # Baseline configuration (netfilter + namespaces)
+│   │   ├── nexus_kasan.config           # Sanitizer overlay (CONFIG_KASAN + CONFIG_SLUB_DEBUG)
+│   │   ├── build_baseline.sh            # Compiles unpatched vulnerable kernel
+│   │   ├── build_kasan.sh               # Compiles KASAN-instrumented kernel
+│   │   └── build_patched.sh             # Compiles kernel with upstream patch applied
+│   ├── rootfs/                          # Generated initramfs images (git-ignored)
+│   ├── build_initramfs.sh               # Bundles BusyBox, trigger, and benchmark tools
+│   ├── run_qemu.sh                      # Universal runner (auto-scales RAM for KASAN)
+│   └── test_kernel.sh                   # Rapid boot tester
 │
-├── patches/                         # Kernel patches
-│   ├── 0001-fix-cve-2022-32250-upstream.patch  # Unified diff of the upstream fix
-│   └── apply_cve_fix.py             # Python helper to apply/revert the fix on source
+├── patches/                             # Patch artifacts
+│   ├── 0001-fix-cve-2022-32250-upstream.patch  # Official unified patch
+│   └── apply_cve_fix.py                 # Idempotent apply/revert Python helper
 │
-├── exploit/                         # Exploit development (WIP)
-│   ├── common/                      # Shared libraries (namespace setup, netlink helpers)
-│   └── cve_2022_32250/              # CVE-specific trigger & analysis code
+├── exploit/                             # Test modules & vulnerability triggers
+│   ├── common/                          # Reusable netlink & namespace helpers
+│   │   ├── namespace_setup.c / .h       # unshare(CLONE_NEWUSER|CLONE_NEWNET) & UID mapping
+│   │   └── netlink_helpers.c / .h       # Header-free Netlink / nf_tables batch serializer
+│   ├── cve_2022_32250/
+│   │   └── trigger.c                    # UAF reproduction driver
+│   ├── Makefile                         # Static binary builder
+│   └── build_exploit.sh                 # Exploit build script
 │
-├── bench/                           # Benchmarking scripts (planned)
+├── bench/                               # Performance profiling suite
+│   ├── bench_netlink.c                  # Transaction latency & throughput micro-benchmark
+│   └── Makefile                         # Static benchmark builder
 │
-└── results/                         # Output artifacts
-    ├── benchmarks/                  # Performance comparison data (planned)
-    └── traces/                      # KASAN traces, dmesg logs (planned)
+└── results/                             # Empirical artifacts
+    ├── traces/
+    │   └── cve-2022-32250-kasan.log     # Captured KASAN UAF & list poison dmesg splat
+    └── benchmarks/
+        ├── kernel_metrics.csv           # Raw performance metrics dataset
+        └── benchmark_summary.md         # In-depth performance evaluation report
 ```
 
 ---
 
-## 🔧 Environment & Prerequisites
+## 🚀 Quick Start Guide
 
-| Requirement | Version / Notes |
-|:---|:---|
-| **Host OS** | Windows 10/11 with WSL2 |
-| **WSL Distro** | Ubuntu 22.04 |
-| **QEMU** | `qemu-system-x86_64` (installed via `apt`) |
-| **Toolchain** | `gcc`, `make`, `flex`, `bison`, `libelf-dev`, `libssl-dev` |
-| **BusyBox** | Static binary for initramfs (downloaded by `build_initramfs.sh`) |
-| **Python 3** | For `apply_cve_fix.py` patch helper |
-
-> **Note**: The project directory lives on the Windows filesystem (`/mnt/c/...` in WSL2). Kernel compilation on `/mnt/c` is slower than on the ext4 filesystem — this is a known WSL2 limitation. No KVM acceleration is available in default WSL2.
-
----
-
-## 🚀 Quick Start
-
-### 1. Clone & Enter
-
+### 1. Prerequisites (WSL2 / Ubuntu)
 ```bash
-git clone https://github.com/<your-username>/NEXUS.git
-cd NEXUS
+sudo apt update && sudo apt install -y qemu-system-x86 build-essential flex bison libelf-dev libssl-dev bc
 ```
 
-### 2. Download Kernel Source
-
+### 2. Kernel Compilation
 ```bash
 cd env/kernel
+
+# 1. Download upstream Linux v5.15.40
 wget https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.40.tar.xz
-tar -xf linux-5.15.40.tar.xz
-rm linux-5.15.40.tar.xz
+tar -xf linux-5.15.40.tar.xz && rm linux-5.15.40.tar.xz
+
+# 2. Build target kernels
+bash build_baseline.sh   # Builds bzImage-baseline (~3.8 MB)
+bash build_kasan.sh      # Builds bzImage-kasan (~8.5 MB, with memory sanitizer)
+bash build_patched.sh    # Builds bzImage-patched (~3.8 MB, with upstream fix)
 ```
 
-### 3. Build Kernel Images
-
+### 3. Build Userspace Tools & Initramfs
 ```bash
-# Baseline (unpatched, vulnerable)
-bash build_baseline.sh
+# Build exploit trigger and benchmark binaries
+cd ../../exploit && bash build_exploit.sh
+cd ../bench && make
 
-# KASAN-enabled (memory sanitizer for UAF detection)
-bash build_kasan.sh
-
-# Patched (upstream fix applied)
-bash build_patched.sh
+# Bundle binaries into guest initramfs
+cd ../env && bash build_initramfs.sh
 ```
 
-### 4. Build Initramfs
+### 4. Running the Lab
 
+#### Test Vulnerability Reproduction (KASAN Kernel)
 ```bash
-cd ../..
-bash env/build_initramfs.sh
+./run_qemu.sh kernel/bzImage-kasan
 ```
+Inside the guest:
+```sh
+/ # trigger
+/ # dmesg | grep -i kasan
+```
+*(Observe the `BUG: KASAN: use-after-free` report)*
 
-### 5. Boot in QEMU
-
+#### Test Patch Remediation (Patched Kernel)
 ```bash
-# Boot baseline kernel
-bash env/run_qemu.sh
+./run_qemu.sh kernel/bzImage-patched
+```
+Inside the guest:
+```sh
+/ # trigger
+/ # dmesg | tail -n 20
+```
+*(Observe clean `-EOPNOTSUPP` rejection with zero KASAN reports or warnings)*
 
-# Boot KASAN kernel (requires 2G RAM)
-qemu-system-x86_64 \
-  -kernel env/kernel/bzImage-kasan \
-  -initrd env/rootfs/initramfs.cpio.gz \
-  -append "console=ttyS0 nokaslr" \
-  -nographic -m 2G -no-reboot
+#### Run Performance Benchmark
+Inside any guest instance:
+```sh
+/ # bench_netlink 500
 ```
 
 > **Exit QEMU**: Press `Ctrl-A` then `X`.
 
 ---
 
-## 🧪 Kernel Build Matrix
+## 🛡️ Mitigation & Defense Evaluation Highlights
 
-| Image | Size | Config | Purpose |
-|:---|:---|:---|:---|
-| `bzImage-baseline` | ~3.7 MB | `nexus_baseline.config` | Unpatched vulnerable kernel for reproduction |
-| `bzImage-kasan` | ~8.5 MB | `nexus_kasan.config` | Instrumented kernel with KASAN & SLUB_DEBUG for memory error detection |
-| `bzImage-patched` | ~3.8 MB | Baseline + upstream fix | Kernel with commit `f36736fbd484` applied to verify the patch |
+Our comprehensive defense analysis ([`docs/defense-evaluation.md`](docs/defense-evaluation.md)) reviews modern mitigations against this bug class:
 
-### Key Kernel Config Options
-
-```
-# Netfilter / nf_tables (attack surface)
-CONFIG_NETFILTER=y
-CONFIG_NF_TABLES=y
-CONFIG_NF_TABLES_IPV4=y
-CONFIG_NF_TABLES_IPV6=y
-
-# Namespace support (unprivileged access path)
-CONFIG_USER_NS=y
-CONFIG_NET_NS=y
-
-# KASAN (memory sanitizer — kasan build only)
-CONFIG_KASAN=y
-CONFIG_KASAN_GENERIC=y
-CONFIG_SLUB_DEBUG=y
-CONFIG_SLUB_DEBUG_ON=y
-
-# Serial console (QEMU output)
-CONFIG_SERIAL_8250=y
-CONFIG_SERIAL_8250_CONSOLE=y
-```
+1. **`CONFIG_RANDOM_KMALLOC_CACHES` (Linux 6.6+)**:  
+   Introduces 16 random buckets per `kmalloc` size, hashed by callsite. With a **~93.75% probability**, allocations from cross-type grooming primitives (`msg_msg`, `pipe_buffer`, `sk_buff`) land in different cache buckets, heavily mitigating heap manipulation.
+2. **`CONFIG_SLAB_FREELIST_HARDENED`**:  
+   Obfuscates free pointers via XOR-canaries. Detects freelist pointer hijacking and panics the kernel before arbitrary write primitives can be established.
+3. **Dedicated Cache Segregation**:  
+   Migrating `nft_expr` allocations from multi-tenant `kmalloc-64` into an isolated `kmem_cache_create("nft_expr", ...)` structurally eliminates cross-type object substitution.
+4. **Namespace Access Gating**:  
+   Restricting unprivileged user namespace creation via sysctl (`user.max_user_namespaces = 0`) or fine-grained LSM policies (Ubuntu 24.04 AppArmor 4.0 profiles) prevents unprivileged users from accessing Netlink interfaces.
 
 ---
 
-## 📖 Documentation
+## 📈 Project Status Matrix
 
-| Document | Description |
-|:---|:---|
-| [`docs/CVE-2022-32250-deep-dive.md`](docs/CVE-2022-32250-deep-dive.md) | Full vulnerability anatomy: source locus, root cause analysis, call graph, upstream patch diff, and vulnerable-vs-patched comparison matrix |
-| [`docs/differential-analysis.md`](docs/differential-analysis.md) | Phase 4 empirical verification report: comparative matrix, KASAN splat analysis, and teardown list poisoning |
-| [`docs/defense-evaluation.md`](docs/defense-evaluation.md) | Phase 5 defense report: allocator mitigations (`RANDOM_KMALLOC_CACHES`, freelist hardening), namespace controls, and hardware memory tagging |
-
----
-
-## 🛡️ Guest Environment Verification
-
-The following capabilities have been verified inside the QEMU guest:
-
-| Capability | Status | Verification |
-|:---|:---|:---|
-| BusyBox shell boot | ✅ | Kernel boots to `/ #` prompt |
-| User namespaces | ✅ | `unshare -U -n id` returns `uid=65534` |
-| `nft_set_elem_expr` in kallsyms | ✅ | 3 matches found in `/proc/kallsyms` |
-| Serial console | ✅ | Full `dmesg` + interactive shell via `-nographic` |
-| Vulnerability reproduction | ✅ | KASAN caught UAF in `nf_tables_bind_set` on unpatched kernel |
-| Upstream patch verification | ✅ | Clean execution with zero warnings on patched kernel |
+| Milestone | Phase | Description | Status |
+|:---:|:---|:---|:---:|
+| 🎯 | **Phase 0** | Repository Architecture & Tooling Setup | ✅ Complete |
+| 🔍 | **Phase 1** | Vulnerability Deep-Dive & Root-Cause Analysis | ✅ Complete |
+| 💻 | **Phase 2** | QEMU Lab Bring-Up (3 Kernels + Initramfs) | ✅ Complete |
+| 🛠️ | **Phase 3** | Exploit Trigger Modules & Static Linking | ✅ Complete |
+| 📊 | **Phase 4** | Empirical Reproduction & Patch Verification | ✅ Complete |
+| 🛡️ | **Phase 5** | Mitigation Analysis & Benchmarking Suite | ✅ Complete |
 
 ---
 
-## 📊 Project Status
+## 📚 References & Prior Work
 
-| Phase | Description | Status |
-|:---|:---|:---|
-| **Phase 0** | Repository structure & architecture | ✅ Complete |
-| **Phase 1** | Vulnerability anatomy & source analysis | ✅ Complete |
-| **Phase 2** | QEMU lab environment (kernel builds + initramfs + boot) | ✅ Complete |
-| **Phase 3** | Exploit modules & initramfs integration | ✅ Complete |
-| **Phase 4** | Patch verification & differential analysis | ✅ Complete |
-| **Phase 5** | Benchmarking & defense evaluation | ✅ Complete |
-
----
-
-## 📚 References
-
-- [CVE-2022-32250 — NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-32250)
-- [Upstream Fix Commit `f36736fbd484`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f36736fbd48491a8d85cd22f4740d542c5a1546e)
-- [Linux Kernel Source — v5.15.40](https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.40.tar.xz)
-- [KASAN Documentation](https://www.kernel.org/doc/html/latest/dev-tools/kasan.html)
-- [Kernel Self-Protection Project (KSPP)](https://kspp.github.io/)
+* [CVE-2022-32250 — National Vulnerability Database (NVD)](https://nvd.nist.gov/vuln/detail/CVE-2022-32250)
+* [Linux Kernel Git — Commit f36736fbd484 (Upstream Fix)](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f36736fbd48491a8d85cd22f4740d542c5a1546e)
+* [Kernel Address Sanitizer (KASAN) Documentation](https://www.kernel.org/doc/html/latest/dev-tools/kasan.html)
+* [Kernel Self-Protection Project (KSPP)](https://kspp.github.io/)
+* [Linux Kernel Source v5.15.40](https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.40.tar.xz)
 
 ---
 
 ## 📝 License
 
-This project is for educational and academic research purposes only.
+This project is licensed under the MIT License for educational and research purposes.

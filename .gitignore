@@ -5,7 +5,7 @@
 # ----- Kernel source trees (LARGE - clone via build scripts) -----
 env/kernel/linux-*/
 
-# ----- Kernel build artifacts -----
+# ----- Kernel build artifacts & images -----
 *.o
 *.ko
 *.mod
@@ -15,7 +15,8 @@ env/kernel/linux-*/
 modules.order
 vmlinux
 vmlinux.h
-bzImage
+bzImage*
+env/kernel/.config*
 
 # ----- Rootfs build artifacts & source trees -----
 env/rootfs/initramfs/
@@ -31,11 +32,14 @@ env/rootfs/*.img
 *.qcow2
 *.raw
 
-# ----- Compiled exploit binaries -----
+# ----- Compiled exploit & benchmark binaries -----
 exploit/common/*.o
 exploit/cve_*/*.o
-exploit/cve_*/trigger
-exploit/cve_*/exploit
+exploit/trigger
+exploit/**/trigger
+exploit/**/exploit
+bench/bench_netlink
+bench/*.o
 
 # ----- Benchmark raw data (keep summary, exclude large CSVs) -----
 results/benchmarks/*.csv
@@ -56,7 +60,3 @@ docs/temp/
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# ----- PDF (already in repo as reference, but large) -----
-# Uncomment if the PDF is too large:
-# *.pdf
