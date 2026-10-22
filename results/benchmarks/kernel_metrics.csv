@@ -1,0 +1,4 @@
+kernel,image_size_bytes,image_size_mb,boot_mem_req_mb,kasan_overhead_pct,netlink_avg_latency_us,throughput_ops_sec
+bzImage-baseline,3973872,3.79,512,0.0,48.2,20746.8
+bzImage-kasan,8842160,8.43,2048,122.5,124.6,8025.7
+bzImage-patched,3973872,3.79,512,0.0,48.4,20661.1

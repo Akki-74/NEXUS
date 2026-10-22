@@ -42,13 +42,10 @@ bench/bench_netlink
 bench/*.o
 
 # ----- Benchmark raw data (keep summary, exclude large CSVs) -----
-results/benchmarks/*.csv
-results/traces/*.log
-results/traces/*.dmesg
+
 
 # ----- Temporary Developer Documentation & Planning Files (Local Only) -----
 SETUP.md
-SESSION_LOG.md
 implementation_plan*.md
 *.pdf
 docs/temp/
