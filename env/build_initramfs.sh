@@ -40,6 +40,13 @@ if [ -f "$PROJECT_ROOT/exploit/trigger" ]; then
     chmod +x bin/trigger
 fi
 
+# Install benchmark binary if compiled in bench/
+if [ -f "$PROJECT_ROOT/bench/bench_netlink" ]; then
+    echo "[+] Including benchmark binary from $PROJECT_ROOT/bench/bench_netlink..."
+    cp "$PROJECT_ROOT/bench/bench_netlink" bin/bench_netlink
+    chmod +x bin/bench_netlink
+fi
+
 # Create init script
 cat > init << 'EOF'
 #!/bin/sh
