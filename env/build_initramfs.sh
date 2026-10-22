@@ -4,9 +4,11 @@
 
 set -e
 
-cd "$(dirname "$0")"
-mkdir -p rootfs
-cd rootfs
+ENV_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$ENV_DIR/.." && pwd)"
+
+mkdir -p "$ENV_DIR/rootfs"
+cd "$ENV_DIR/rootfs"
 
 echo "[*] Building BusyBox initramfs..."
 
@@ -30,6 +32,13 @@ for cmd in sh ls cat mount umount uname echo dmesg id whoami touch mkdir mknod \
            free top df du stat readlink basename dirname vi; do
     ln -sf busybox bin/$cmd
 done
+
+# Install trigger binary if compiled in exploit/
+if [ -f "$PROJECT_ROOT/exploit/trigger" ]; then
+    echo "[+] Including exploit trigger binary from $PROJECT_ROOT/exploit/trigger..."
+    cp "$PROJECT_ROOT/exploit/trigger" bin/trigger
+    chmod +x bin/trigger
+fi
 
 # Create init script
 cat > init << 'EOF'

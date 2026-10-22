@@ -183,6 +183,7 @@ CONFIG_SERIAL_8250_CONSOLE=y
 | Document | Description |
 |:---|:---|
 | [`docs/CVE-2022-32250-deep-dive.md`](docs/CVE-2022-32250-deep-dive.md) | Full vulnerability anatomy: source locus, root cause analysis, call graph, upstream patch diff, and vulnerable-vs-patched comparison matrix |
+| [`docs/differential-analysis.md`](docs/differential-analysis.md) | Phase 4 empirical verification report: comparative matrix, KASAN splat analysis, and teardown list poisoning |
 
 ---
 
@@ -196,6 +197,8 @@ The following capabilities have been verified inside the QEMU guest:
 | User namespaces | ✅ | `unshare -U -n id` returns `uid=65534` |
 | `nft_set_elem_expr` in kallsyms | ✅ | 3 matches found in `/proc/kallsyms` |
 | Serial console | ✅ | Full `dmesg` + interactive shell via `-nographic` |
+| Vulnerability reproduction | ✅ | KASAN caught UAF in `nf_tables_bind_set` on unpatched kernel |
+| Upstream patch verification | ✅ | Clean execution with zero warnings on patched kernel |
 
 ---
 
@@ -206,8 +209,8 @@ The following capabilities have been verified inside the QEMU guest:
 | **Phase 0** | Repository structure & architecture | ✅ Complete |
 | **Phase 1** | Vulnerability anatomy & source analysis | ✅ Complete |
 | **Phase 2** | QEMU lab environment (kernel builds + initramfs + boot) | ✅ Complete |
-| **Phase 3** | Exploit development & KASAN trace capture | 🔲 Planned |
-| **Phase 4** | Patch verification & differential analysis | 🔲 Planned |
+| **Phase 3** | Exploit modules & initramfs integration | ✅ Complete |
+| **Phase 4** | Patch verification & differential analysis | ✅ Complete |
 | **Phase 5** | Benchmarking & defense evaluation | 🔲 Planned |
 
 ---
